@@ -1,0 +1,6 @@
+colored>=2.2.4
+halo>=0.0.31
+prompt_toolkit>=3.0.48
+python-vlc>=3.0.20123
+mutagen>=1.47.0
+tomlkit>=0.12.5
