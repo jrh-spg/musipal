@@ -3,27 +3,20 @@ stages:
   - package
 
 variables:
-  PYTHON_VERSION: "3.12"
   PIP_NO_CACHE_DIR: "off"
 
-.build_template: &build_template
-  image: ubuntu:24.04
+build_onefile:
+  image: python:3.12-slim
+  stage: build
   before_script:
     - set -eux
     - apt-get update -y
-    - apt-get install -y software-properties-common curl gnupg build-essential git ca-certificates
-    - add-apt-repository ppa:deadsnakes/ppa -y || true
-    - apt-get update -y
-    - apt-get install -y python3.12 python3.12-venv python3.12-dev python3-pip ruby ruby-dev rpm dpkg-dev
-    - python3.12 -m venv .venv
+    - apt-get install -y --no-install-recommends build-essential git curl ca-certificates gcc libffi-dev libsndfile1 libssl-dev pkg-config
+    - python -m venv .venv
     - . .venv/bin/activate
     - pip install --upgrade pip
     - pip install -r requirements.txt
     - pip install pyinstaller tomlkit
-
-build_onefile:
-  <<: *build_template
-  stage: build
   script:
     - ./packaging/build.sh --onefile
   artifacts:
@@ -32,7 +25,7 @@ build_onefile:
     expire_in: 1 week
 
 package_artifacts:
-  image: ubuntu:24.04
+  image: ruby:3.2
   stage: package
   needs:
     - job: build_onefile
@@ -40,7 +33,7 @@ package_artifacts:
   before_script:
     - set -eux
     - apt-get update -y
-    - apt-get install -y ruby ruby-dev build-essential rpm dpkg-dev
+    - apt-get install -y --no-install-recommends rpm dpkg-dev build-essential
     - gem install --no-document fpm
     - mkdir -p pkgroot/usr/local/bin
     - cp dist/musipal pkgroot/usr/local/bin/musipal
