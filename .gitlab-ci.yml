@@ -8,6 +8,8 @@ variables:
 build_onefile:
   image: python:3.12-slim
   stage: build
+  tags:
+    - docker-executor
   before_script:
     - set -eux
     - apt-get update -y
@@ -27,6 +29,8 @@ build_onefile:
 package_artifacts:
   image: ruby:3.2
   stage: package
+  tags:
+    - docker-executor
   needs:
     - job: build_onefile
       artifacts: true
