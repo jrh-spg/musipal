@@ -31,14 +31,14 @@ Build with PyInstaller:
 
 ```bash
 ./packaging/build.sh            # one-folder build
-./dist/musipal/musipal
+./dist/musipal
 ```
 
 If you want to copy it into `~/bin`, either copy the whole folder:
 
 ```bash
-cp -r dist/musipal ~/bin/musipal
-~/bin/musipal/musipal
+cp -av dist/musipal ~/bin/
+~/bin/musipal
 ```
 
 Or build a single-file executable:
