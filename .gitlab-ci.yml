@@ -1,0 +1,56 @@
+stages:
+  - build
+  - package
+
+variables:
+  PYTHON_VERSION: "3.12"
+  PIP_NO_CACHE_DIR: "off"
+
+.build_template: &build_template
+  image: ubuntu:24.04
+  before_script:
+    - set -eux
+    - apt-get update -y
+    - apt-get install -y software-properties-common curl gnupg build-essential git ca-certificates
+    - add-apt-repository ppa:deadsnakes/ppa -y || true
+    - apt-get update -y
+    - apt-get install -y python3.12 python3.12-venv python3.12-dev python3-pip ruby ruby-dev rpm dpkg-dev
+    - python3.12 -m venv .venv
+    - . .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install pyinstaller tomlkit
+
+build_onefile:
+  <<: *build_template
+  stage: build
+  script:
+    - ./packaging/build.sh --onefile
+  artifacts:
+    paths:
+      - dist/musipal
+    expire_in: 1 week
+
+package_artifacts:
+  image: ubuntu:24.04
+  stage: package
+  needs:
+    - job: build_onefile
+      artifacts: true
+  before_script:
+    - set -eux
+    - apt-get update -y
+    - apt-get install -y ruby ruby-dev build-essential rpm dpkg-dev
+    - gem install --no-document fpm
+    - mkdir -p pkgroot/usr/local/bin
+    - cp dist/musipal pkgroot/usr/local/bin/musipal
+    - chmod +x pkgroot/usr/local/bin/musipal
+    - export VERSION="${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}"
+  script:
+    - fpm -s dir -t deb -n musipal -v "$VERSION" -C pkgroot usr/local/bin/musipal
+    - fpm -s dir -t rpm -n musipal -v "$VERSION" -C pkgroot usr/local/bin/musipal
+  artifacts:
+    paths:
+      - '*.deb'
+      - '*.rpm'
+    expire_in: 1 week
