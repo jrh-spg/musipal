@@ -1,7 +1,7 @@
-__pycache__/
+__pycache__
 __init__.py
 .venv
-build/*
+build
 dist/*
 *.egg-info/
 .env
