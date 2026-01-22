@@ -63,6 +63,22 @@ cp dist/musipal ~/bin/musipal
 - `w` write current queue to an M3U playlist
 - `l` load an M3U playlist into queue
 
+Streaming and Icecast
+- `t` toggle streaming of the current track to the configured Icecast mount (starts/stops streaming)
+- `T` set the Icecast server URL for this session (inline input mode)
+
+When you press `T` an inline input prompt appears in the status area. Type the server URL and press `Enter` to save (or `Esc` to cancel). Backspace and normal printable characters are supported. The URL is stored only for the running session unless you edit the config manually.
+
+Example Icecast URL (with source password)
+
+- Typical Icecast source URL format (replace `SECRET_PASSWORD` and `mount`):
+
+	icecast://source:SECRET_PASSWORD@icecast.example.com:8000/mount
+
+- Keep your source password private; do not commit real credentials to the repository or share them publicly.
+
+Streaming requires `ffmpeg` on your PATH (the app spawns `ffmpeg` to encode and push to the Icecast mount).
+
 ## Config
 
 Config file: `~/.config/musipal/config.toml`
