@@ -11,6 +11,7 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.formatted_text import ANSI
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.layout import HSplit, Layout, VSplit
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import D
@@ -25,6 +26,7 @@ from musipal.library import iter_audio_files_recursive, list_dir
 from musipal.player import Player, QueueItem
 from musipal.playlists import PlaylistEntry, load_m3u, write_m3u
 from musipal.session import SessionState, load_session, save_session
+from musipal.icecast import get_streamer
 
 
 @dataclass
@@ -39,6 +41,14 @@ class State:
 
 
 def run_app(*, library_root_override: str | None = None) -> None:
+    # Default Icecast server URL (customize as needed)
+    ICECAST_URL = "http://localhost:8000/stream"
+    streaming_active = False
+    input_mode = False
+    input_buffer = ""
+    stream_task = None
+    not_input = Condition(lambda: not input_mode)
+    input_only = Condition(lambda: input_mode)
     cfg = load_config(library_root_override)
 
     with Halo(text="Loading library...", spinner="dots") as spinner:
@@ -47,6 +57,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         spinner.succeed(status_ok(f"Library root: {root}"))
 
     player = Player()
+
 
     saved_session = load_session()
 
@@ -374,6 +385,9 @@ def run_app(*, library_root_override: str | None = None) -> None:
         return f"[{filled}{empty}] {c(elapsed_s, 'white')} / {c(total_s, 'white')}"
 
     def render_status() -> None:
+        # ...original code, no streaming status injected...
+        # ...existing code...
+        
         is_playing = player.is_playing()
         now = player.now_playing()
         elapsed, total = player.playback_times()
@@ -465,6 +479,10 @@ def run_app(*, library_root_override: str | None = None) -> None:
             msg += "\n" + c("File:", "white", bold=True) + " " + c(fname, "white")
 
         msg += "\n" + bar
+        # If we're in inline input mode, show the prompt and buffer.
+        if input_mode:
+            prompt = c("Icecast server URL:", "white", bold=True) + " " + c(input_buffer + "_", "white")
+            msg += "\n" + prompt
         status_control.text = ANSI(msg)
 
     def rerender() -> None:
@@ -481,6 +499,75 @@ def run_app(*, library_root_override: str | None = None) -> None:
         render_library()
         render_queue()
         render_status()
+        try:
+            app.invalidate()
+        except Exception:
+            pass
+
+    async def _stream_monitor() -> None:
+        nonlocal streaming_active, stream_task
+        last_index = player.current_index()
+        try:
+            while streaming_active:
+                try:
+                    cur_idx = player.current_index()
+                    if cur_idx != last_index:
+                        # Track changed: restart streamer on new item
+                        try:
+                            with open('/tmp/musipal_debug.log', 'a') as fh:
+                                fh.write(f"stream_monitor: track change {last_index!r} -> {cur_idx!r}\n")
+                        except Exception:
+                            pass
+                        try:
+                            get_streamer().stop()
+                        except Exception:
+                            pass
+                        # Start streaming new current item
+                        ci = player.current_item()
+                        if ci is not None:
+                            elapsed, _ = player.playback_times()
+                            start_sec = float(elapsed) if elapsed is not None else None
+                            try:
+                                get_streamer().start(ci.uri, ICECAST_URL, start_seconds=start_sec)
+                                try:
+                                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                                        fh.write(f"stream_monitor: restarted streamer for {ci.uri!r} start_seconds={start_sec!r}\n")
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                try:
+                                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                                        fh.write(f"stream_monitor: restart failed: {e!r}\n")
+                                except Exception:
+                                    pass
+                        last_index = cur_idx
+                    # If ffmpeg died unexpectedly, try to restart current item
+                    streamer = get_streamer()
+                    if not streamer.is_streaming() and streaming_active:
+                        ci = player.current_item()
+                        if ci is not None:
+                            elapsed, _ = player.playback_times()
+                            start_sec = float(elapsed) if elapsed is not None else None
+                            try:
+                                with open('/tmp/musipal_debug.log', 'a') as fh:
+                                    fh.write(f"stream_monitor: ffmpeg not running, attempting restart for {ci.uri!r}\n")
+                            except Exception:
+                                pass
+                            try:
+                                streamer.start(ci.uri, ICECAST_URL, start_seconds=start_sec)
+                            except Exception as e:
+                                try:
+                                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                                        fh.write(f"stream_monitor: restart attempt failed: {e!r}\n")
+                                except Exception:
+                                    pass
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    await asyncio.sleep(1.0)
+        finally:
+            stream_task = None
 
     def selected_path() -> Path | None:
         if not state.library_items:
@@ -490,6 +577,188 @@ def run_app(*, library_root_override: str | None = None) -> None:
         return state.library_items[state.selected_index]
 
     kb = KeyBindings()
+
+    @kb.add("t", filter=not_input)
+    def _toggle_streaming(event) -> None:
+        nonlocal streaming_active, stream_task
+        try:
+            with open('/tmp/musipal_debug.log', 'a') as fh:
+                fh.write('t pressed: toggle handler invoked\n')
+        except Exception:
+            pass
+        streamer = get_streamer()
+        try:
+            with open('/tmp/musipal_debug.log', 'a') as fh:
+                fh.write(f"streamer.available={streamer.available()}\n")
+        except Exception:
+            pass
+        if not streamer.available():
+            set_status(status_err("ffmpeg not found for streaming"))
+            rerender()
+            return
+        # Log queue and current item for debugging
+        try:
+            with open('/tmp/musipal_debug.log', 'a') as fh:
+                qlen = len(player.queue) if player.queue is not None else 0
+                cur = player.current_item()
+                fh.write(f"queue_len={qlen} current_item={getattr(cur,'uri',None)!r}\n")
+        except Exception:
+            pass
+        if not player.queue:
+            set_status(status_warn("Queue is empty; nothing to stream"))
+            rerender()
+            return
+        current = player.current_item()
+        if current is None:
+            set_status(status_warn("No track selected for streaming"))
+            rerender()
+            return
+        input_uri = current.uri
+        if not streaming_active:
+            try:
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write(f"starting streamer: input_uri={input_uri!r} dest={ICECAST_URL!r}\n")
+                except Exception:
+                    pass
+                # Start from current playback position if available.
+                elapsed, _ = player.playback_times()
+                start_seconds = float(elapsed) if elapsed is not None else None
+                streamer.start(input_uri, ICECAST_URL, start_seconds=start_seconds)
+                streaming_active = True
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write(f"streamer.start succeeded start_seconds={start_seconds!r}\n")
+                except Exception:
+                    pass
+                # Launch monitor task to handle track changes and restarts.
+                try:
+                    if stream_task is None:
+                        stream_task = app.create_background_task(_stream_monitor())
+                except Exception:
+                    pass
+                set_status(status_ok(f"Streaming to {ICECAST_URL}"))
+            except Exception as e:
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write(f"streamer.start exception: {e!r}\n")
+                except Exception:
+                    pass
+                set_status(status_err(f"Stream error: {e}"))
+        else:
+            try:
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write('stopping streamer\n')
+                except Exception:
+                    pass
+                # Record pre-stop state
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write(f"pre-stop is_streaming={streamer.is_streaming()}\n")
+                except Exception:
+                    pass
+                streamer.stop()
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write('streamer.stop completed\n')
+                except Exception:
+                    pass
+                # Cancel monitor task if running
+                try:
+                    if stream_task is not None:
+                        stream_task.cancel()
+                        stream_task = None
+                except Exception:
+                    pass
+                set_status(status_ok("Stopped streaming"))
+            except Exception as e:
+                try:
+                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                        fh.write(f"streamer.stop exception: {e!r}\n")
+                except Exception:
+                    pass
+                set_status(status_err(f"Stop error: {e}"))
+            finally:
+                # Ensure our toggle state is cleared so the user can start again.
+                streaming_active = False
+        rerender()
+
+    @kb.add("T", filter=not_input)
+    def _set_stream_server(event) -> None:
+        nonlocal ICECAST_URL, input_mode, input_buffer
+        # Enter inline input mode using the modal TextArea.
+        try:
+            with open('/tmp/musipal_debug.log', 'a') as fh:
+                fh.write('T pressed: entering input_mode\n')
+        except Exception:
+            pass
+        input_mode = True
+        input_buffer = ICECAST_URL or ""
+        try:
+            app.layout.focus(library_control)
+        except Exception:
+            pass
+        set_status(status_ok("Enter Icecast server URL (type and press Enter)"))
+        rerender()
+
+    @kb.add("<any>", filter=input_only)
+    def _capture_input(event) -> None:
+        nonlocal input_mode, input_buffer, ICECAST_URL
+        try:
+            with open('/tmp/musipal_debug.log', 'a') as fh:
+                ke = event.key_sequence[0]
+                fh.write(f"capture: key={ke.key!r}, data={getattr(ke,'data',None)!r}\n")
+        except Exception:
+            pass
+        key_event = event.key_sequence[0]
+        name = key_event.key
+        data = getattr(key_event, "data", None)
+        if name == "escape":
+            input_mode = False
+            try:
+                app.layout.focus(library_control)
+            except Exception:
+                pass
+            set_status(status_warn("Input cancelled"))
+            rerender()
+            return
+        # Some terminals send DEL (\x7f) as data rather than 'backspace' key name.
+        if data in ("\x7f", "\b") or name == "backspace":
+            input_buffer = input_buffer[:-1]
+            rerender()
+            return
+        # Accept common representations of Enter/Return
+        if name in ("enter", "\r", "\n", "c-m") or data in ("\r", "\n"):
+            ICECAST_URL = input_buffer.strip()
+            input_mode = False
+            try:
+                app.layout.focus(library_control)
+            except Exception:
+                pass
+            try:
+                with open('/tmp/musipal_debug.log', 'a') as fh:
+                    fh.write(f"Entered URL: {ICECAST_URL!r}\n")
+            except Exception:
+                pass
+            set_status(status_ok(f"Icecast server set to {ICECAST_URL}"))
+            rerender()
+            return
+        # Append only single printable characters (avoid control sequences like '^?').
+        if isinstance(data, str) and len(data) == 1 and data.isprintable():
+            input_buffer += data
+            rerender()
+
+    @kb.add("escape", filter=input_only)
+    def _cancel_input(event) -> None:
+        nonlocal input_mode
+        input_mode = False
+        try:
+            app.layout.focus(library_control)
+        except Exception:
+            pass
+        set_status(status_warn("Input cancelled"))
+        rerender()
 
     session_saved = False
 
@@ -518,7 +787,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         state.focused_pane = "queue"
         event.app.layout.focus(queue_control)
 
-    @kb.add("tab")
+    @kb.add("tab", filter=not_input)
     def _tab(event) -> None:
         if state.focused_pane == "library":
             _focus_queue(event)
@@ -526,7 +795,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
             _focus_library(event)
         rerender()
 
-    @kb.add("s-tab")
+    @kb.add("s-tab", filter=not_input)
     def _shift_tab(event) -> None:
         if state.focused_pane == "queue":
             _focus_library(event)
@@ -554,22 +823,19 @@ def run_app(*, library_root_override: str | None = None) -> None:
             usable = max(1, h - queue_header_lines)
             return max(1, usable - 1)
         except Exception:
-            # Always define these before any use
-            odd = ((i + 1) % 2 == 1)
-            prefix = "> " if i == state.queue_selected_index else "  "
-            prefix_color = "white"
-            num_color = "light_gray" if odd else "white"
-            times_color = "light_gray" if odd else "white"
-            prefix_rendered = c(prefix, prefix_color, bold=True) if i == state.queue_selected_index else prefix
-            num_rendered = c(f"{i+1:>3}.", num_color)
-            num_rendered = c(f"{i+1:>3}.", num_color)
+            return 10
+
+    @kb.add("up", filter=not_input)
+    def _up(event) -> None:
+        if state.focused_pane == "queue":
+            q = player.queue
             if q:
                 state.queue_selected_index = max(0, state.queue_selected_index - 1)
         else:
             state.selected_index = max(0, state.selected_index - 1)
         rerender()
 
-    @kb.add("down")
+    @kb.add("down", filter=not_input)
     def _down(event) -> None:
         if state.focused_pane == "queue":
             q = player.queue
@@ -579,7 +845,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
             state.selected_index = min(len(state.library_items) - 1, state.selected_index + 1)
         rerender()
 
-    @kb.add("pageup")
+    @kb.add("pageup", filter=not_input)
     def _page_up(event) -> None:
         if state.focused_pane == "queue":
             q = player.queue
@@ -589,7 +855,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
             state.selected_index = max(0, state.selected_index - _page_step())
         rerender()
 
-    @kb.add("pagedown")
+    @kb.add("pagedown", filter=not_input)
     def _page_down(event) -> None:
         if state.focused_pane == "queue":
             q = player.queue
@@ -599,7 +865,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
             state.selected_index = min(len(state.library_items) - 1, state.selected_index + _page_step())
         rerender()
 
-    @kb.add("enter")
+    @kb.add("enter", filter=not_input)
     def _enter(event) -> None:
         if state.focused_pane == "queue":
             q = player.queue
@@ -627,7 +893,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         set_status(status_ok(f"Playing {p.name}"))
         rerender()
 
-    @kb.add("backspace")
+    @kb.add("backspace", filter=not_input)
     def _back(event) -> None:
         if state.cwd == root:
             return
@@ -659,7 +925,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         player.add_path(p)
         set_status(status_ok(f"Added {p.name}"))
 
-    @kb.add("a")
+    @kb.add("a", filter=not_input)
     def _add(event) -> None:
         p = selected_path()
         if not p or p.is_dir():
@@ -667,7 +933,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         _enqueue_path(p)
         rerender()
 
-    @kb.add("A")
+    @kb.add("A", filter=not_input)
     def _add_dir_recursive(event) -> None:
         p = selected_path()
         if not p:
@@ -680,33 +946,67 @@ def run_app(*, library_root_override: str | None = None) -> None:
             spinner.succeed(status_ok(f"Added {len(files)} items"))
         rerender()
 
-    @kb.add(" ")
+    @kb.add(" ", filter=not_input)
     def _space(event) -> None:
+        # Toggle local playback pause/play and pause/resume the stream if active.
         player.toggle_pause()
+        # If streaming is active, sync streamer with player state immediately.
+        try:
+            streamer = get_streamer()
+            if streaming_active:
+                if not player.is_playing():
+                    # Pause: stop ffmpeg but keep streaming_active so we can resume.
+                    try:
+                        with open('/tmp/musipal_debug.log', 'a') as fh:
+                            fh.write('space: pausing playback -> stopping ffmpeg\n')
+                    except Exception:
+                        pass
+                    try:
+                        if streamer.is_streaming():
+                            streamer.stop()
+                    except Exception as e:
+                        try:
+                            with open('/tmp/musipal_debug.log', 'a') as fh:
+                                fh.write(f"space: stop exception: {e!r}\n")
+                        except Exception:
+                            pass
+                else:
+                    # Resume: start ffmpeg at current playback position if not running.
+                    try:
+                        if not streamer.is_streaming():
+                            ci = player.current_item()
+                            if ci is not None:
+                                elapsed, _ = player.playback_times()
+                                start_sec = float(elapsed) if elapsed is not None else None
+                                try:
+                                    streamer.start(ci.uri, ICECAST_URL, start_seconds=start_sec)
+                                    with open('/tmp/musipal_debug.log', 'a') as fh:
+                                        fh.write(f"space: resumed playback -> started ffmpeg start_seconds={start_sec!r}\n")
+                                except Exception as e:
+                                    try:
+                                        with open('/tmp/musipal_debug.log', 'a') as fh:
+                                            fh.write(f"space: start exception: {e!r}\n")
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         rerender()
 
-    @kb.add("n")
+    @kb.add("n", filter=not_input)
     def _next(event) -> None:
         player.next()
         rerender()
 
-    @kb.add("p")
+    @kb.add("p", filter=not_input)
     def _prev(event) -> None:
         player.previous()
         rerender()
 
-    @kb.add("s")
-    def _stream(event) -> None:
-        from prompt_toolkit.shortcuts import input_dialog
+    # Icecast streaming code fully removed
 
-        url = input_dialog(title="Icecast/Stream", text="Enter stream URL:").run()
-        if not url:
-            return
-        player.add_url(url, display=f"Stream: {url}")
-        set_status(status_ok("Added stream URL"))
-        rerender()
-
-    @kb.add("w")
+    @kb.add("w", filter=not_input)
     def _write_playlist(event) -> None:
         from prompt_toolkit.shortcuts import input_dialog
 
@@ -719,7 +1019,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         set_status(status_ok(f"Wrote {path}"))
         rerender()
 
-    @kb.add("l")
+    @kb.add("l", filter=not_input)
     def _load_playlist(event) -> None:
         from prompt_toolkit.shortcuts import input_dialog
 
@@ -740,7 +1040,7 @@ def run_app(*, library_root_override: str | None = None) -> None:
         set_status(status_ok(f"Loaded {len(uris)} items"))
         rerender()
 
-    @kb.add("q")
+    @kb.add("q", filter=not_input)
     def _quit(event) -> None:
         _save_current_session()
         player.stop()
@@ -749,6 +1049,8 @@ def run_app(*, library_root_override: str | None = None) -> None:
     library_window = Window(content=library_control, wrap_lines=False)
     queue_window = Window(content=queue_control, wrap_lines=False)
     status_window = Window(content=status_control, height=5, wrap_lines=True)
+
+    # Inline input handled by key-capture; no separate TextArea widget used.
 
     library_frame = Frame(library_window, title=ANSI(c("Library", "light_magenta", bold=True)), width=D(weight=1))
     queue_frame = Frame(queue_window, title=ANSI(c("Queue", "white")), width=D(weight=1))
@@ -780,6 +1082,18 @@ def run_app(*, library_root_override: str | None = None) -> None:
 
     def _pre_run() -> None:
         # At this point, prompt_toolkit has an active asyncio loop.
+        loop = asyncio.get_event_loop()
+        def log_async_exception(loop, context):
+            import traceback
+            with open('/tmp/musipal_async.log', 'a') as fh:
+                fh.write('UNHANDLED ASYNC EXCEPTION\n')
+                exc = context.get('exception')
+                if exc:
+                    traceback.print_exception(type(exc), exc, exc.__traceback__, file=fh)
+                else:
+                    fh.write(str(context) + '\n')
+        loop.set_exception_handler(log_async_exception)
+
         app.create_background_task(_ticker())
 
         if saved_session is not None and saved_session.queue:
@@ -805,6 +1119,12 @@ def run_app(*, library_root_override: str | None = None) -> None:
     rerender()
     try:
         app.run(pre_run=_pre_run)
+    except Exception as e:
+        import traceback
+        with open('/tmp/musipal_fatal.log', 'w') as fh:
+            fh.write('FATAL ERROR CAUGHT BY TOP-LEVEL HANDLER\n')
+            traceback.print_exc(file=fh)
+        raise
     finally:
         if not session_saved:
             _save_current_session()
