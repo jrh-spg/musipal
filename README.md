@@ -7,7 +7,27 @@ Terminal (CLI/TUI) music player:
 - CUE sheets supported (tracks mapped to start/stop times)
 - Icecast streams (play by URL)
 
-## Install (dev)
+There's also a [Go port](go/README.md) with the same features and config/session
+file formats, built on tview/ffmpeg instead of prompt_toolkit/python-vlc — see
+[Prebuilt packages](#prebuilt-packages) below for ready-to-install rpm/deb builds.
+
+## Prebuilt packages
+
+Each [GitHub release](https://github.com/jrh-spg/musipal/releases) ships rpm/deb
+packages of the Go port for:
+
+| Distro       | Package                              | Install                              |
+|--------------|---------------------------------------|---------------------------------------|
+| RHEL 9       | `musipal-<version>.el9.x86_64.rpm`    | `sudo dnf install ./musipal-*.el9.x86_64.rpm` |
+| RHEL 10      | `musipal-<version>.el10.x86_64.rpm`   | `sudo dnf install ./musipal-*.el10.x86_64.rpm` |
+| Ubuntu 24.04 | `musipal_<version>_ubuntu24.04_amd64.deb` | `sudo apt install ./musipal_*_ubuntu24.04_amd64.deb` |
+| Ubuntu 26.04 | `musipal_<version>_ubuntu26.04_amd64.deb` | `sudo apt install ./musipal_*_ubuntu26.04_amd64.deb` |
+
+These packages install a single `/usr/bin/musipal` binary; `ffmpeg` (for
+`ffplay`/`ffprobe`) must be installed separately for playback and streaming.
+Packages are built by [.github/workflows/package.yml](.github/workflows/package.yml).
+
+## Install (dev, Python version)
 
 ```bash
 python -m venv .venv
@@ -22,7 +42,7 @@ pip install -e .
 musipal
 ```
 
-## Build a Linux binary
+## Build a Linux binary (Python version)
 
 This app uses `python-vlc`, which depends on the system VLC/libVLC runtime.
 On Ubuntu/Debian you typically need `vlc` installed.
@@ -62,6 +82,8 @@ cp dist/musipal ~/bin/musipal
 - `q` quit
 - `w` write current queue to an M3U playlist
 - `l` load an M3U playlist into queue
+- `d` or `Delete` delete selected song from queue
+- `D` delete playlist file
 
 Streaming and Icecast
 - `t` toggle streaming of the current track to the configured Icecast mount (starts/stops streaming)
