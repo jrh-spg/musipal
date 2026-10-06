@@ -2,28 +2,18 @@ stages:
   - build
   - package
 
-variables:
-  PIP_NO_CACHE_DIR: "off"
-
-build_onefile:
-  image: python:3.12-slim
+build_binary:
+  image: golang:1.24-bookworm
   stage: build
   tags:
     - docker-executor
-  before_script:
-    - set -eux
-    - apt-get update -y
-    - apt-get install -y --no-install-recommends build-essential git curl ca-certificates gcc libffi-dev libsndfile1 libssl-dev pkg-config
-    - python -m venv .venv
-    - . .venv/bin/activate
-    - pip install --upgrade pip
-    - pip install -r requirements.txt
-    - pip install pyinstaller tomlkit
+  variables:
+    CGO_ENABLED: "0"
   script:
-    - ./packaging/build.sh --onefile
+    - go build -trimpath -ldflags="-s -w" -o musipal ./cmd/musipal
   artifacts:
     paths:
-      - dist/musipal
+      - musipal
     expire_in: 1 week
 
 package_artifacts:
@@ -32,7 +22,7 @@ package_artifacts:
   tags:
     - docker-executor
   needs:
-    - job: build_onefile
+    - job: build_binary
       artifacts: true
   before_script:
     - set -eux
@@ -40,7 +30,7 @@ package_artifacts:
     - apt-get install -y --no-install-recommends rpm dpkg-dev build-essential
     - gem install --no-document fpm
     - mkdir -p pkgroot/usr/local/bin
-    - cp dist/musipal pkgroot/usr/local/bin/musipal
+    - cp musipal pkgroot/usr/local/bin/musipal
     - chmod +x pkgroot/usr/local/bin/musipal
     - export VERSION="${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}"
   script:

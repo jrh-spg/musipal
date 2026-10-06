@@ -33,7 +33,7 @@ common_args=(
   -s dir -n musipal -v "$VERSION"
   --license MIT
   --description "CLI/TUI music player"
-  --url "https://github.com/jake/musipal"
+  --url "https://github.com/jrh-spg/musipal"
 )
 
 if [[ "$PKG_TYPE" == "rpm" ]]; then

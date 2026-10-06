@@ -1,9 +1,6 @@
-__pycache__
-__init__.py
-.venv
-build
-dist/*
-*.egg-info/
+/musipal
+dist-pkg/
+pkgroot/
 .env
 .DS_Store
 .vscode/

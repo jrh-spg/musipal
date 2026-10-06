@@ -1,20 +1,22 @@
 # musipal
 
-Terminal (CLI/TUI) music player:
+Terminal (CLI/TUI) music player, written in Go:
 - Local library browser (file-manager-like)
 - Playlists (M3U)
-- Playback via VLC (mp3/ogg/flac + more)
+- Playback via ffplay (mp3/ogg/flac + more)
 - CUE sheets supported (tracks mapped to start/stop times)
-- Icecast streams (play by URL)
+- Icecast streaming of the current track via ffmpeg
 
-There's also a [Go port](go/README.md) with the same features and config/session
-file formats, built on tview/ffmpeg instead of prompt_toolkit/python-vlc — see
-[Prebuilt packages](#prebuilt-packages) below for ready-to-install rpm/deb builds.
+## Requirements
+
+- Go 1.24+ (only needed to build from source)
+- `ffmpeg` (provides `ffplay`/`ffprobe`/`ffmpeg`) on `PATH`, for playback,
+  duration/bitrate probing, and Icecast streaming
 
 ## Prebuilt packages
 
 Each [GitHub release](https://github.com/jrh-spg/musipal/releases) ships rpm/deb
-packages of the Go port for:
+packages:
 
 | Distro       | Package                              | Install                              |
 |--------------|---------------------------------------|---------------------------------------|
@@ -23,83 +25,59 @@ packages of the Go port for:
 | Ubuntu 24.04 | `musipal_<version>_ubuntu24.04_amd64.deb` | `sudo apt install ./musipal_*_ubuntu24.04_amd64.deb` |
 | Ubuntu 26.04 | `musipal_<version>_ubuntu26.04_amd64.deb` | `sudo apt install ./musipal_*_ubuntu26.04_amd64.deb` |
 
-These packages install a single `/usr/bin/musipal` binary; `ffmpeg` (for
-`ffplay`/`ffprobe`) must be installed separately for playback and streaming.
-Packages are built by [.github/workflows/package.yml](.github/workflows/package.yml).
+These packages install a single `/usr/bin/musipal` binary; `ffmpeg` must be
+installed separately. Packages are built by
+[.github/workflows/package.yml](.github/workflows/package.yml).
 
-## Install (dev, Python version)
+## Build from source
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
+go build -o musipal ./cmd/musipal
+./musipal
 ```
 
-## Run
+Or run directly without a separate build step:
 
 ```bash
-musipal
-```
-
-## Build a Linux binary (Python version)
-
-This app uses `python-vlc`, which depends on the system VLC/libVLC runtime.
-On Ubuntu/Debian you typically need `vlc` installed.
-
-Build with PyInstaller:
-
-```bash
-./packaging/build.sh            # one-folder build
-./dist/musipal
-```
-
-If you want to copy it into `~/bin`, either copy the whole folder:
-
-```bash
-cp -av dist/musipal ~/bin/
-~/bin/musipal
-```
-
-Or build a single-file executable:
-
-```bash
-./packaging/build.sh --onefile
-cp dist/musipal ~/bin/musipal
-~/bin/musipal --help
+go run ./cmd/musipal --library-root /path/to/music
 ```
 
 ## Keys
 
 - `↑/↓` move
-- `Enter` open directory / play file
+- `Enter` open directory / play file / activate selected queue item
 - `Backspace` go up
+- `b` / `B` back / forward through visited directories
+- `PageUp`/`PageDown` move selection by page
+- `Tab` / `Shift-Tab` switch focus between Library and Queue
 - `a` add selected item to queue
 - `A` add directory recursively to queue
-- `s` add Icecast/stream URL to queue
 - `Space` play/pause
 - `n` next, `p` previous
-- `q` quit
 - `w` write current queue to an M3U playlist
 - `l` load an M3U playlist into queue
 - `d` or `Delete` delete selected song from queue
 - `D` delete playlist file
+- `h` show help
+- `q` quit
 
 Streaming and Icecast
 - `t` toggle streaming of the current track to the configured Icecast mount (starts/stops streaming)
 - `T` set the Icecast server URL for this session (inline input mode)
 
-When you press `T` an inline input prompt appears in the status area. Type the server URL and press `Enter` to save (or `Esc` to cancel). Backspace and normal printable characters are supported. The URL is stored only for the running session unless you edit the config manually.
+When you press `T` an inline input prompt appears in the status area. Type the
+server URL and press `Enter` to save (or `Esc` to cancel). The URL is stored
+only for the running session unless you edit the config manually.
 
-Example Icecast URL (with source password)
+Example Icecast URL (with source password), replacing `SECRET_PASSWORD` and `mount`:
 
-- Typical Icecast source URL format (replace `SECRET_PASSWORD` and `mount`):
+    icecast://source:SECRET_PASSWORD@icecast.example.com:8000/mount
 
-	icecast://source:SECRET_PASSWORD@icecast.example.com:8000/mount
+Keep your source password private; do not commit real credentials to the
+repository or share them publicly.
 
-- Keep your source password private; do not commit real credentials to the repository or share them publicly.
-
-Streaming requires `ffmpeg` on your PATH (the app spawns `ffmpeg` to encode and push to the Icecast mount).
+Streaming requires `ffmpeg` on your `PATH` (the app spawns `ffmpeg` to encode
+and push to the Icecast mount).
 
 ## Config
 
@@ -109,3 +87,6 @@ Config file: `~/.config/musipal/config.toml`
 library_root = "/path/to/music"
 playlists_dir = "/path/to/playlists"
 ```
+
+Session state (queue + playback position) is persisted to
+`~/.config/musipal/last_session.json` and restored on the next launch.
