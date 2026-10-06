@@ -1,5 +1,7 @@
 # musipal
 
+![musipal logo](logo.png)
+
 Terminal (CLI/TUI) music player, written in Go:
 - Local library browser (file-manager-like)
 - Playlists (M3U)
